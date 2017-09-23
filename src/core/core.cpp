@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <memory>
+#include <thread>
 #include <utility>
 #include "audio_core/audio_core.h"
 #include "common/logging/log.h"
@@ -26,6 +27,11 @@ namespace Core {
 
 /*static*/ System System::s_instance;
 
+std::thread CpuThread;
+std::atomic<bool> CpuThreadRunning;
+std::atomic<bool> RunCPU;
+std::atomic<int> TightLoop;
+
 System::ResultStatus System::RunLoop(int tight_loop) {
     status = ResultStatus::Success;
     if (!cpu_core) {
@@ -47,6 +53,15 @@ System::ResultStatus System::RunLoop(int tight_loop) {
         }
     }
 
+    TightLoop += tight_loop;
+    RunCPU = true;
+
+    HW::Update();
+
+    return status;
+}
+
+void System::RunLoopInner() {
     // If we don't have a currently active thread then don't execute instructions,
     // instead advance to the next event and try to yield to the next thread
     if (Kernel::GetCurrentThread() == nullptr) {
@@ -55,13 +70,20 @@ System::ResultStatus System::RunLoop(int tight_loop) {
         CoreTiming::Advance();
         PrepareReschedule();
     } else {
-        cpu_core->Run(tight_loop);
+        cpu_core->Run(TightLoop);
     }
 
-    HW::Update();
+    TightLoop = 0;
     Reschedule();
+}
 
-    return status;
+void System::RunLoopInThread() {
+    while (CpuThreadRunning) {
+        if (RunCPU) {
+            RunLoopInner();
+            RunCPU = false;
+        }
+    }
 }
 
 System::ResultStatus System::SingleStep() {
@@ -164,10 +186,16 @@ System::ResultStatus System::Init(EmuWindow* emu_window, u32 system_mode) {
     GetAndResetPerfStats();
     perf_stats.BeginSystemFrame();
 
+    CpuThreadRunning = true;
+    CpuThread = std::thread(&System::RunLoopInThread, this);
+
     return ResultStatus::Success;
 }
 
 void System::Shutdown() {
+    CpuThreadRunning = false;
+    CpuThread.join();
+
     // Log last frame performance stats
     auto perf_results = GetAndResetPerfStats();
     Telemetry().AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",

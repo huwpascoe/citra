@@ -54,6 +54,8 @@ public:
      * @return Result status, indicating whethor or not the operation succeeded.
      */
     ResultStatus RunLoop(int tight_loop = 1000);
+    void RunLoopInThread();
+    void RunLoopInner();
 
     /**
      * Step the CPU one instruction

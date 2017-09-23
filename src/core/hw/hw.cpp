@@ -82,7 +82,9 @@ template void Write<u16>(u32 addr, const u16 data);
 template void Write<u8>(u32 addr, const u8 data);
 
 /// Update hardware
-void Update() {}
+void Update() {
+    GPU::Update();
+}
 
 /// Initialize hardware
 void Init() {

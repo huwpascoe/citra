@@ -328,6 +328,8 @@ void Write(u32 addr, const T data);
 /// Initialize hardware
 void Init();
 
+void Update();
+
 /// Shutdown hardware
 void Shutdown();
 

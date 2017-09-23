@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <boost/lockfree/queue.hpp>
 #include <cstring>
 #include <numeric>
 #include <type_traits>
@@ -27,6 +28,14 @@
 namespace GPU {
 
 Regs g_regs;
+
+struct WriteThing {
+    u32 addr;
+    u32 data;
+};
+
+std::atomic<bool> VBlankGo = false;
+boost::lockfree::queue<WriteThing> WriteQueue(128);
 
 /// 268MHz CPU clocks / 60Hz frames per second
 const u64 frame_ticks = static_cast<u64>(BASE_CLOCK_RATE_ARM11 / SCREEN_REFRESH_RATE);
@@ -392,6 +401,11 @@ static void TextureCopy(const Regs::DisplayTransferConfig& config) {
 
 template <typename T>
 inline void Write(u32 addr, const T data) {
+    WriteQueue.push(WriteThing{addr, static_cast<u32>(data)});
+}
+
+template <typename T>
+inline void WriteE(u32 addr, const T data) {
     addr -= HW::VADDR_GPU;
     u32 index = addr / 4;
 
@@ -515,8 +529,6 @@ template void Write<u8>(u32 addr, const u8 data);
 
 /// Update hardware
 static void VBlankCallback(u64 userdata, int cycles_late) {
-    VideoCore::g_renderer->SwapBuffers();
-
     // Signal to GSP that GPU interrupt has occurred
     // TODO(yuriks): hwtest to determine if PDC0 is for the Top screen and PDC1 for the Sub
     // screen, or if both use the same interrupts and these two instead determine the
@@ -524,6 +536,7 @@ static void VBlankCallback(u64 userdata, int cycles_late) {
     // two different intervals.
     Service::GSP::SignalInterrupt(Service::GSP::InterruptId::PDC0);
     Service::GSP::SignalInterrupt(Service::GSP::InterruptId::PDC1);
+    VBlankGo = true;
 
     // Reschedule recurrent event
     CoreTiming::ScheduleEvent(frame_ticks - cycles_late, vblank_event);
@@ -563,6 +576,17 @@ void Init() {
     CoreTiming::ScheduleEvent(frame_ticks, vblank_event);
 
     LOG_DEBUG(HW_GPU, "initialized OK");
+}
+
+void Update() {
+    WriteThing thing;
+    while (WriteQueue.pop(thing)) {
+        WriteE<u32>(thing.addr, thing.data);
+    }
+    if (VBlankGo) {
+        VideoCore::g_renderer->SwapBuffers();
+        VBlankGo = false;
+    }
 }
 
 /// Shutdown hardware
